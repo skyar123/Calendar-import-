@@ -16,7 +16,7 @@ From the **intake date**:
 | Baseline assessments | intake + 60 days |
 | Initial treatment plan | intake + 60 days |
 | Treatment plan reviews | every 90 days after that, through the end of service |
-| SNIFF update | intake + 90 days, repeating every 90 |
+| SNIFF update | intake + 90 days, repeating every 90 (four across a year) |
 | 6-month reassessment | intake + 180 days |
 | Annual review / discharge window | intake + 365 days |
 
@@ -27,6 +27,19 @@ From the **child's date of birth** (and the caregiver's, if you paste it):
   16 months and closes at 30, a BITSEA baseline moves to PKBS-2 past 48 months,
   and the ASQ-3 ages out at 66 months. Only the ones that fall while the family
   is still in service are scheduled.
+
+### Across a year of service
+
+A family you carry for twelve months gets, in order: baseline and initial plan
+at day 60, the first SNIFF at 90, plan review #1 at 150, the 6-month at 180,
+review #2 at 240, review #3 at 330, and the annual/discharge window on the
+anniversary — with SNIFFs every 90 days throughout and the birthday wherever it
+falls. Reviews carry on a quarter past the year in case discharge runs late.
+
+The quarterly SNIFF always shows **the current quarter's**, not the first one
+ever. A client half a year in sees the SNIFF that is actually coming, not one
+from two quarters ago sitting permanently overdue. A SNIFF that slipped within
+the last month still reads as overdue rather than being skipped past.
 
 **Pregnant caregiver at admission** follows the prenatal path instead: a prenatal
 baseline at 60 days, then Birth of Child 60 days after the birth date you add,
@@ -249,7 +262,7 @@ doing before you clear site data.
 npm install
 npm run dev      # local dev server
 npm run build    # production build into dist/
-npm test         # 77 checks over the date math, the parser, and the .ics output
+npm test         # 82 checks over the date math, the parser, and the .ics output
 ```
 
 Deploy on Netlify by connecting this repository directly — `netlify.toml` at

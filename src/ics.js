@@ -61,9 +61,14 @@ const fold = (line) => {
   return parts.join('\r\n');
 };
 
-const RECURRENCE_RULES = {
-  yearly: 'RRULE:FREQ=YEARLY',
-  every90: 'RRULE:FREQ=DAILY;INTERVAL=90;COUNT=8',
+const recurrenceRule = (m) => {
+  if (m.recurrence === 'yearly') return 'RRULE:FREQ=YEARLY';
+  if (m.recurrence === 'every90') {
+    // COUNT is however many are actually left before service ends, worked out
+    // in rules.js, rather than a fixed number that outlives the family.
+    return `RRULE:FREQ=DAILY;INTERVAL=90;COUNT=${Math.max(1, m.count || 8)}`;
+  }
+  return null;
 };
 
 const recurrenceNote = {
@@ -157,7 +162,7 @@ function milestoneEvents(client, m, leadTimes, nameStyle, headsUp, skipPast) {
   const today = todayISO();
   const overdue = !m.recurrence && m.date < today;
   const isBirthday = m.category === 'birthday';
-  const rrule = m.recurrence ? RECURRENCE_RULES[m.recurrence] : null;
+  const rrule = recurrenceRule(m);
   const category = CATEGORY_LABELS[m.category] || 'Due date';
   const baseUid = `${clientKey(client)}-${safeUid(m.id)}`;
 

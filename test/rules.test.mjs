@@ -4,7 +4,8 @@
 
 import assert from 'node:assert/strict';
 import {
-  addDays, addMonths, formatAge, formatDate, getClientSchedule, getIssues, getUpcoming, parseDate, toISODate,
+  addDays, addMonths, daysBetween, formatAge, formatDate, getClientSchedule, getIssues,
+  getRelativeDue, getUpcoming, parseDate, toISODate,
 } from '../src/rules.js';
 import { findDates, findDeclaredCount, parseCaseload } from '../src/parse.js';
 import { buildCaseloadIcs, buildClientIcs, buildRemovalIcs, buildZip, countPastDates, displayName, exportedUids, googleCalendarUrl, slug } from '../src/ics.js';
@@ -65,9 +66,15 @@ test('the 6-month reassessment lands 180 days after intake', () => {
   assert.equal(find('six-month').date, '2026-08-02');
 });
 
-test('SNIFF starts at 90 days and is marked as repeating every 90', () => {
-  assert.equal(find('sniff').date, '2026-05-04');
-  assert.equal(find('sniff').recurrence, 'every90');
+test('SNIFF sits on a 90-day step from intake and repeats every 90', () => {
+  const sniff = find('sniff');
+  assert.equal(sniff.recurrence, 'every90');
+  const offset = daysBetween(client.intakeDate, sniff.date);
+  assert.ok(offset >= 90, 'never earlier than the first quarter');
+  assert.equal(offset % 90, 0, `must land on a quarter boundary, got day ${offset}`);
+  // Which quarter is current depends on today, so the fixed assertion is the
+  // alignment rather than the date.
+  assert.ok(daysBetween(sniff.date, toISODate(new Date())) < 90, 'and it is the live quarter');
 });
 
 test('treatment plan reviews step 90 days off the initial plan', () => {
@@ -647,6 +654,57 @@ test('the same id-less client is stable across exports', () => {
   const c = { name: 'X Y', dob: '2023-01-01', intakeDate: '2026-01-01' };
   assert.equal(buildClientIcs(c).ics.match(/UID:(.*)/)[1], buildClientIcs({ ...c }).ics.match(/UID:(.*)/)[1],
     'a re-export must still update in place, not duplicate');
+});
+
+
+// ---- a full year of service ------------------------------------------------
+
+test('a year in service is covered end to end', () => {
+  const intake = toISODate(new Date());
+  const c = { id: 'yr', name: 'Year Long', dob: '2024-05-15', intakeDate: intake };
+  const at = (days) => getClientSchedule(c).filter((m) => daysBetween(intake, m.date) === days).map((m) => m.id);
+  assert.deepEqual(at(60).sort(), ['baseline', 'tx-initial'], 'baseline and initial plan at 60 days');
+  assert.deepEqual(at(150), ['tx-review-1']);
+  assert.deepEqual(at(180), ['six-month']);
+  assert.deepEqual(at(240), ['tx-review-2']);
+  assert.deepEqual(at(330), ['tx-review-3']);
+  assert.deepEqual(at(365), ['annual'], 'the annual window lands on the anniversary');
+});
+
+test('quarterly SNIFFs span the whole year, not just the first one', () => {
+  const intake = toISODate(new Date());
+  const c = { id: 'yr2', name: 'Year Long', dob: '2024-05-15', intakeDate: intake };
+  const sniff = getClientSchedule(c).find((m) => m.id === 'sniff');
+  assert.equal(daysBetween(intake, sniff.date), 90, 'the first falls a quarter in');
+  assert.ok(sniff.count >= 4, `a year needs at least four SNIFFs, got ${sniff.count}`);
+  // The recurrence has to reach the far end of the year, not stop short.
+  const last = addDays(sniff.date, 90 * (sniff.count - 1));
+  assert.ok(daysBetween(intake, last) >= 360, 'the last SNIFF must reach the end of the year');
+  assert.ok(buildClientIcs(c).ics.includes(`COUNT=${sniff.count}`));
+});
+
+test('the SNIFF shown is the current quarter, not the first one ever', () => {
+  const today = toISODate(new Date());
+  // Half a year in: the day-90 SNIFF is two quarters closed, not the live one.
+  const mid = { id: 'mid', name: 'Mid', dob: '2024-05-15', intakeDate: addDays(today, -200) };
+  const sniff = getClientSchedule(mid).find((m) => m.id === 'sniff');
+  assert.equal(daysBetween(mid.intakeDate, sniff.date), 180, 'the second SNIFF, not the first');
+  assert.ok(daysBetween(sniff.date, today) < 30, 'and it is the recent one, not a stale one');
+});
+
+test('a SNIFF that slipped a fortnight still reads as overdue', () => {
+  const today = toISODate(new Date());
+  const slipped = { id: 'sl', name: 'Slipped', dob: '2024-05-15', intakeDate: addDays(today, -104) };
+  const sniff = getClientSchedule(slipped).find((m) => m.id === 'sniff');
+  assert.ok(sniff.date < today, 'a recently missed SNIFF must not be skipped past');
+  assert.equal(getRelativeDue(sniff.date).tone, 'red');
+});
+
+test('a client running long keeps a SNIFF rather than losing it', () => {
+  const long = { id: 'lg', name: 'Long', dob: '2024-05-15', intakeDate: addDays(toISODate(new Date()), -600) };
+  const sniff = getClientSchedule(long).find((m) => m.id === 'sniff');
+  assert.ok(sniff, 'the SNIFF must not vanish past the end of service');
+  assert.ok(sniff.count >= 1);
 });
 
 if (!process.exitCode) console.log(`✓ ${passed} tests passed`);

@@ -206,9 +206,9 @@ export function getClientSchedule(client) {
   const intake = client.intakeDate;
   const pregnant = client.type === 'pregnant';
 
-  const push = (id, label, date, category, { items = [], detail = '', recurrence = null, turning = null } = {}) => {
+  const push = (id, label, date, category, { items = [], detail = '', recurrence = null, turning = null, count = null } = {}) => {
     if (!date) return;
-    out.push({ id, label, date, category, items, detail, recurrence, turning });
+    out.push({ id, label, date, category, items, detail, recurrence, turning, count });
   };
 
   // --- Birthdays: yearly, anchored on the next occurrence ---
@@ -280,10 +280,29 @@ export function getClientSchedule(client) {
   }
 
   // --- SNIFF every 90 days ---
-  push('sniff', 'SNIFF update due', addDays(intake, INTERVALS.SNIFF_DAYS), 'sniff', {
+  // Anchored on the CURRENT quarter's SNIFF, not the first one ever. Left on the
+  // first, a client half a year into service would show a SNIFF permanently
+  // months overdue while the one actually coming up went unmentioned, and the
+  // calendar would carry occurrences from quarters already closed.
+  //
+  // "Current" allows a month of grace, so a SNIFF that genuinely slipped three
+  // weeks ago still reads as overdue rather than being skipped past.
+  const sniffGrace = addDays(todayISO(), -30);
+  let sniffDate = addDays(intake, INTERVALS.SNIFF_DAYS);
+  while (sniffDate && sniffDate < sniffGrace) {
+    const step = addDays(sniffDate, INTERVALS.SNIFF_DAYS);
+    if (!step || step <= sniffDate) break;
+    sniffDate = step;
+  }
+  // How many are left before service ends — never fewer than one, so the SNIFF
+  // cannot quietly vanish from a client who is running long.
+  let sniffCount = 0;
+  for (let d = sniffDate; d && d <= serviceEnd; d = addDays(d, INTERVALS.SNIFF_DAYS)) sniffCount++;
+  push('sniff', 'SNIFF update due', sniffDate, 'sniff', {
     items: SNIFF_ITEMS,
     detail: 'Service Needs Inventory for Families — redone every 90 days for the length of service.',
     recurrence: 'every90',
+    count: Math.max(1, sniffCount),
   });
 
   // --- Birth of Child (Pregnant AA) ---
