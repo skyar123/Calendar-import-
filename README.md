@@ -20,6 +20,21 @@ From the **intake date**:
 | 6-month reassessment | intake + 180 days |
 | Annual review / discharge window | intake + 365 days |
 
+Plus one date that is **entered, never calculated**:
+
+| Deadline | When |
+| --- | --- |
+| Authorization expires | the date you type in — warns 30, 14, 7 and 1 days out |
+
+How long an authorisation runs depends on the payer, the service code and what
+the MCO actually granted on the request. None of that follows from the intake
+date, so the app does not try to derive it: no auth date entered means no auth
+deadline, rather than a confident guess. Type it on the client's card, or paste
+a line carrying `auth expires 8/15/2026` and it will be read.
+
+Reauthorisation warns earliest of anything here — a month out — because it is
+the one deadline whose consequence for being late is a gap in billing.
+
 From the **child's date of birth** (and the caregiver's, if you paste it):
 
 - The birthday itself, repeating every year.
@@ -262,7 +277,7 @@ doing before you clear site data.
 npm install
 npm run dev      # local dev server
 npm run build    # production build into dist/
-npm test         # 82 checks over the date math, the parser, and the .ics output
+npm test         # 86 checks over the date math, the parser, and the .ics output
 ```
 
 Deploy on Netlify by connecting this repository directly — `netlify.toml` at

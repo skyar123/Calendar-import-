@@ -89,6 +89,7 @@ const LABELS = {
   caregiverDob: /\b(caregiver|parent|mom|mother|dad|father|cg)[^.\n]{0,14}\b(d\.?o\.?b\.?|birth\s*date|birthday|b-?day)\b/i,
   intake: /\b(intake|admission|admit(?:ted)?|enroll(?:ment|ed)?|start(?:\s*of\s*service)?|soc)\b/i,
   birth: /\b(birth of child|baby born|delivery|delivered|birth date of (?:the )?(?:baby|infant))\b/i,
+  authExpires: /\b(auth(?:orization|orisation)?)\s*(?:exp(?:ires?|iration)?|end(?:s|ing)?|thru|through|until|valid\s*(?:to|until))\b|\bre-?auth(?:\s*due)?\b/i,
 };
 
 // Pull "<label> <date>" pairs out of one line. The date has to sit within ~28
@@ -104,6 +105,7 @@ function labelledDates(line, dates) {
   };
   // Caregiver DOB first: its pattern is a superset of the plain DOB pattern.
   claim('caregiverDob', LABELS.caregiverDob);
+  claim('authExpires', LABELS.authExpires);
   claim('birth', LABELS.birth);
   claim('intake', LABELS.intake);
   claim('dob', LABELS.dob);
@@ -141,6 +143,7 @@ const HEADER_MAP = [
   ['caregiverDob', /\b(caregiver|parent|mom|mother|dad|father|cg)\b.*\b(dob|birth)\b/i],
   ['caregiverName', /\b(caregiver|parent|mom|mother|guardian)\b.*\b(name)?\b/i],
   ['intakeDate', /\b(intake|admission|admit|enroll|start|soc)\b/i],
+  ['authExpires', /\bauth\w*\b.*\b(exp|end|thru|through|until)\w*\b|\bre-?auth\b/i],
   ['birthDate', /\bbirth of child|baby born|delivery\b/i],
   ['dob', /\b(dob|date of birth|birth\s*date|birthday|born)\b/i],
   ['name', /\b(name|client|child|patient|family)\b/i],
@@ -158,7 +161,7 @@ function mapHeader(cells) {
 
 const blank = () => ({
   id: uid(), name: '', nickname: '', dob: '', caregiverName: '', caregiverDob: '',
-  intakeDate: '', birthDate: '', type: 'child', notes: '',
+  intakeDate: '', birthDate: '', authExpires: '', type: 'child', notes: '',
 });
 
 function rowFromCells(cells, headerMap) {
@@ -242,6 +245,7 @@ export function parseCaseload(text) {
     if (labelled.caregiverDob) c.caregiverDob = labelled.caregiverDob.iso;
     if (labelled.intake) c.intakeDate = labelled.intake.iso;
     if (labelled.birth) c.birthDate = labelled.birth.iso;
+    if (labelled.authExpires) c.authExpires = labelled.authExpires.iso;
 
     // Whatever the labels did not claim gets worked out from the layout.
     const claimed = new Set(Object.values(labelled).map((d) => d.index));

@@ -26,7 +26,7 @@ const STORE_KEY = 'cf_duedates_v1';
 
 const emptyClient = () => ({
   id: uid(), name: '', nickname: '', dob: '', caregiverName: '', caregiverDob: '',
-  intakeDate: '', birthDate: '', type: 'child', notes: '',
+  intakeDate: '', birthDate: '', authExpires: '', type: 'child', notes: '',
 });
 
 // Names are compared loosely — punctuation, spacing and "Last, First" order all
@@ -671,6 +671,12 @@ function ClientCard({ client, categories, onChange, onRemove, onDischarge, onExp
               </Field>
               <Field label="Caregiver name">
                 <input className="in" value={client.caregiverName} onChange={(e) => onChange({ caregiverName: e.target.value })} />
+              </Field>
+              <Field label="Authorization expires">
+                <input
+                  className="in" type="date" value={client.authExpires || ''}
+                  onChange={(e) => onChange({ authExpires: e.target.value })}
+                />
               </Field>
               <Field label="Caregiver DOB">
                 <input className="in" type="date" value={client.caregiverDob} onChange={(e) => onChange({ caregiverDob: e.target.value })} />

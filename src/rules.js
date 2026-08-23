@@ -137,6 +137,9 @@ export const DEFAULT_LEAD_TIMES = {
   annual: [30, 7],
   ageWindow: [14],
   birthOfChild: [7, 1],
+  // Reauthorisation is the one deadline with a billing consequence for being
+  // late, and a request takes time to turn around, so it warns earliest.
+  authorization: [30, 14, 7, 1],
 };
 
 export const CATEGORY_LABELS = {
@@ -148,6 +151,7 @@ export const CATEGORY_LABELS = {
   annual: 'Annual / Discharge',
   ageWindow: 'Age Window',
   birthOfChild: 'Birth of Child',
+  authorization: 'Authorization',
 };
 
 // ---- Age-specific tool rules (mirrors clientUtils.getSETool) ---------------
@@ -326,6 +330,18 @@ export function getClientSchedule(client) {
       ? 'Six months after the Birth of Child assessments.'
       : `Six months (${INTERVALS.SIX_MONTH_DAYS} days) after intake.`,
   });
+
+  // --- Authorisation expiry ---
+  // Entered by hand, never computed. How long an authorisation runs depends on
+  // the payer, the service code and what the MCO actually granted on the
+  // request — none of which follows from the intake date, so guessing a rule
+  // here would produce confident, wrong deadlines.
+  if (client.authExpires) {
+    push('auth-expires', 'Authorization expires', client.authExpires, 'authorization', {
+      items: ['Reauthorisation request — submit before this date to avoid a gap'],
+      detail: 'Service authorisation runs out on this date. The warnings ahead of it are your window to get the reauthorisation in.',
+    });
+  }
 
   // --- Annual / discharge window ---
   push('annual', 'Annual review / discharge window', addDays(intake, INTERVALS.ANNUAL_DAYS), 'annual', {

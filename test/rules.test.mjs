@@ -707,4 +707,39 @@ test('a client running long keeps a SNIFF rather than losing it', () => {
   assert.ok(sniff.count >= 1);
 });
 
+
+// ---- authorisation expiry --------------------------------------------------
+
+test('an authorisation expiry is scheduled only when one is entered', () => {
+  const base = { id: 'au', name: 'Au Th', dob: '2024-01-01', intakeDate: '2026-01-01' };
+  assert.equal(getClientSchedule(base).find((m) => m.id === 'auth-expires'), undefined,
+    'never invented from the intake date');
+  const withAuth = { ...base, authExpires: '2026-09-30' };
+  const m = getClientSchedule(withAuth).find((m2) => m2.id === 'auth-expires');
+  assert.ok(m);
+  assert.equal(m.date, '2026-09-30', 'used exactly as entered, not derived');
+  assert.equal(m.category, 'authorization');
+});
+
+test('reauthorisation warns a month out, earlier than anything else', () => {
+  const c = { id: 'au2', name: 'Au Th', dob: '2024-01-01', intakeDate: addDays(toISODate(new Date()), -60), authExpires: addDays(toISODate(new Date()), 60) };
+  const out = buildClientIcs(c).ics.replace(/\r\n /g, '');
+  assert.ok(out.includes('⏳ 30 days'), 'a month of notice to get the request in');
+  assert.ok(out.includes('⏳ 14 days'));
+  const due = out.split('BEGIN:VEVENT').find((b) => /SUMMARY:🔴[^\r\n]*Authorization expires/.test(b));
+  assert.ok(due, 'and the expiry itself is marked');
+});
+
+test('an auth date is read from a labelled paste', () => {
+  const { clients } = parseCaseload('Cole, Sam — DOB 4/1/2023, intake 2/1/2026, auth expires 8/15/2026');
+  assert.equal(clients[0].authExpires, '2026-08-15');
+  assert.equal(clients[0].dob, '2023-04-01');
+  assert.equal(clients[0].intakeDate, '2026-02-01');
+});
+
+test('a caseload paste with no auth column leaves the field empty', () => {
+  const { clients } = parseCaseload('Cole, Sam (12) 4/1/2023 M 4/1/2023 999-99-9999 ORG 2/1/2026 9:00 AM');
+  assert.equal(clients[0].authExpires, '', 'no auth date must not be guessed at');
+});
+
 if (!process.exitCode) console.log(`✓ ${passed} tests passed`);

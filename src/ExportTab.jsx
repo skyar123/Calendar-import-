@@ -13,7 +13,7 @@ import { buildClientIcs, countPastDates, displayName } from './ics.js';
 
 export const CATEGORY_ORDER = [
   'birthday', 'baseline', 'treatmentPlan', 'sniff', 'sixMonth',
-  'birthOfChild', 'annual', 'ageWindow',
+  'birthOfChild', 'authorization', 'annual', 'ageWindow',
 ];
 
 export default function ExportTab({
