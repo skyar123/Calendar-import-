@@ -742,4 +742,122 @@ test('a caseload paste with no auth column leaves the field empty', () => {
   assert.equal(clients[0].authExpires, '', 'no auth date must not be guessed at');
 });
 
+
+// ---- RFC 5545 line folding, in octets ---------------------------------------
+
+const OCTETS = new TextEncoder();
+
+test('no line exceeds 75 octets, whatever the alphabet', () => {
+  // Folding once counted characters, which let a CJK or emoji name reach 217
+  // octets on one line.
+  [
+    ['ascii', 'A'.repeat(300)],
+    ['accented', 'Ñoño Güéllar-Þorvaldsdóttir de la Cruz'.repeat(4)],
+    ['emoji', '🎈'.repeat(60)],
+    ['cjk', '李'.repeat(120)],
+  ].forEach(([label, name]) => {
+    const out = buildClientIcs({ id: 'f', name, nickname: name, dob: '2024-03-03', intakeDate: '2026-06-01' }, { nameStyle: 'nickname' }).ics;
+    out.split('\r\n').forEach((line) => {
+      const n = OCTETS.encode(line).length;
+      assert.ok(n <= 75, `${label}: a line ran to ${n} octets`);
+    });
+  });
+});
+
+test('folding never cuts a character in half', () => {
+  const name = '👨‍👩‍👧‍👦 Family Ünit ' + '🎈'.repeat(40);
+  const out = buildClientIcs({ id: 'f2', name, nickname: name, dob: '2024-03-03', intakeDate: '2026-06-01' }, { nameStyle: 'nickname' }).ics;
+  out.split('\r\n').forEach((line) => {
+    assert.ok(!/[\uD800-\uDBFF]$/.test(line), 'a line ended mid-surrogate, which is invalid UTF-8');
+  });
+  assert.ok(out.split('\r\n ').join('').includes(name), 'and unfolding restores the original exactly');
+});
+
+// ---- 29 February ------------------------------------------------------------
+
+test('a leap-day birthday stays in February', () => {
+  // Left to new Date(), 29 Feb rolls into 1 March — and since the entry recurs
+  // yearly from wherever it lands, the child would keep a March birthday.
+  ['2024-02-29', '2020-02-29', '2016-02-29'].forEach((dob) => {
+    const b = getClientSchedule({ id: 'lp', name: 'Leap Child', dob, intakeDate: '2026-01-01' })
+      .find((m) => m.id === 'bday-child');
+    assert.ok(b, 'a leap baby still gets a birthday');
+    assert.ok(/-02-(28|29)$/.test(b.date), `expected late February, got ${b.date}`);
+  });
+});
+
+test('ordinary month-ends are untouched by the leap-day handling', () => {
+  [['2022-01-31', '-01-31'], ['2023-03-15', '-03-15'], ['2021-12-31', '-12-31']].forEach(([dob, ending]) => {
+    const b = getClientSchedule({ id: 'me', name: 'M E', dob, intakeDate: '2026-01-01' })
+      .find((m) => m.id === 'bday-child');
+    assert.ok(b.date.endsWith(ending), `${dob} moved to ${b.date}`);
+  });
+});
+
+// ---- format integrity under hostile input -----------------------------------
+
+test('a name carrying calendar syntax cannot break out of its value', () => {
+  const evil = 'END:VEVENT\r\nBEGIN:VEVENT\r\nSUMMARY:INJECTED';
+  const out = buildClientIcs({ id: 'inj', name: evil, nickname: evil, dob: '2024-03-03', intakeDate: '2026-06-01' }, { nameStyle: 'nickname' }).ics;
+  const logical = out.split('\r\n ').join('').split('\r\n');
+  assert.equal(logical.filter((l) => l === 'BEGIN:VEVENT').length, logical.filter((l) => l === 'END:VEVENT').length);
+  assert.equal(logical.filter((l) => l === 'SUMMARY:INJECTED').length, 0, 'no forged event');
+  assert.ok(!logical.some((l) => /[\r\n]/.test(l)), 'no raw newline survives inside a value');
+});
+
+test('every emitted line is a property or a continuation', () => {
+  ['Semi;colon', 'Comma,Name', 'Back\\slash', 'Line\nBreak'].forEach((name) => {
+    const out = buildClientIcs({ id: 'p', name, nickname: name, dob: '2024-03-03', intakeDate: '2026-06-01' }, { nameStyle: 'nickname' }).ics;
+    out.split('\r\n ').join('').split('\r\n').filter(Boolean).forEach((l) => {
+      assert.ok(/^[A-Z][A-Z0-9-]*[;:]/.test(l), `stray line from ${JSON.stringify(name)}: ${JSON.stringify(l.slice(0, 40))}`);
+    });
+  });
+});
+
+// ---- date arithmetic --------------------------------------------------------
+
+test('adding days is exact across daylight-saving boundaries', () => {
+  ['2026-03-06', '2026-10-30', '2027-03-12'].forEach((start) => {
+    const seen = new Set();
+    let d = start;
+    for (let i = 0; i < 14; i++) { d = addDays(d, 1); assert.ok(!seen.has(d), `repeated ${d}`); seen.add(d); }
+    assert.equal(daysBetween(start, d), 14, `drifted from ${start}`);
+  });
+});
+
+test('an all-day entry spans exactly one day and ends after it starts', () => {
+  const out = buildClientIcs({ id: 'ad', name: 'A D', dob: '2024-02-29', intakeDate: '2026-06-01' }).ics;
+  out.split('\r\n ').join('').split('BEGIN:VEVENT').slice(1).forEach((ev) => {
+    const s = ev.match(/DTSTART;VALUE=DATE:(\d{8})/)[1];
+    const e = ev.match(/DTEND;VALUE=DATE:(\d{8})/)[1];
+    assert.ok(s < e, `${s} is not before ${e}`);
+    const iso = (x) => `${x.slice(0, 4)}-${x.slice(4, 6)}-${x.slice(6)}`;
+    assert.equal(daysBetween(iso(s), iso(e)), 1);
+  });
+});
+
+test('a warning states the true number of days left', () => {
+  const c2 = { id: 'wt', name: 'W T', dob: '2023-05-05', intakeDate: addDays(toISODate(new Date()), 40) };
+  const blocks = buildClientIcs(c2).ics.split('\r\n ').join('').split('BEGIN:VEVENT').slice(1);
+  const due = blocks.find((b) => /SUMMARY:🔴[^\r\n]*6-month/.test(b)).match(/DTSTART;VALUE=DATE:(\d{8})/)[1];
+  const iso = (x) => `${x.slice(0, 4)}-${x.slice(4, 6)}-${x.slice(6)}`;
+  blocks.filter((b) => /SUMMARY:⏳[^\r\n]*6-month/.test(b)).forEach((b) => {
+    const on = b.match(/DTSTART;VALUE=DATE:(\d{8})/)[1];
+    const claimed = Number(b.match(/SUMMARY:⏳ (\d+) day/)[1]);
+    assert.ok(on < due, 'a warning must precede its deadline');
+    assert.equal(daysBetween(iso(on), iso(due)), claimed, 'the countdown must be true');
+  });
+});
+
+test('nothing in the schedule ever throws, whatever the record', () => {
+  [{}, { id: 'w' }, { id: 'w', dob: 'garbage', intakeDate: 'nonsense' },
+   { id: 'w', dob: '2026-01-01', intakeDate: '2020-01-01' },
+   { id: 'w', dob: null, intakeDate: undefined },
+   { id: 'w', dob: '2024-01-01', intakeDate: '2026-01-01', excluded: null },
+  ].forEach((w, i) => {
+    assert.doesNotThrow(() => { getClientSchedule(w); buildClientIcs(w); }, `case ${i}`);
+    assert.ok(Array.isArray(getClientSchedule(w)));
+  });
+});
+
 if (!process.exitCode) console.log(`✓ ${passed} tests passed`);

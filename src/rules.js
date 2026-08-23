@@ -216,14 +216,23 @@ export function getClientSchedule(client) {
   };
 
   // --- Birthdays: yearly, anchored on the next occurrence ---
+  // A 29 February birthday has no day to land on in three years out of four.
+  // Left to `new Date`, it rolls forward into 1 March — and since the calendar
+  // entry recurs yearly from wherever it lands, the child would then have a
+  // March birthday for good. It is clamped back to the 28th instead, which is
+  // the convention for marking the day early and stays inside February.
+  const onOrBefore = (year, month, day) => {
+    const lastOfMonth = new Date(year, month + 1, 0).getDate();
+    return new Date(year, month, Math.min(day, lastOfMonth));
+  };
+
   const nextBirthday = (dobStr) => {
     const dob = parseDate(dobStr);
     if (!dob) return null;
-    const now = new Date();
-    let year = now.getFullYear();
-    let next = new Date(year, dob.getMonth(), dob.getDate());
+    let year = new Date().getFullYear();
+    let next = onOrBefore(year, dob.getMonth(), dob.getDate());
     // Compare on date only, so today's birthday still counts as today.
-    if (toISODate(next) < todayISO()) next = new Date(++year, dob.getMonth(), dob.getDate());
+    if (toISODate(next) < todayISO()) next = onOrBefore(++year, dob.getMonth(), dob.getDate());
     return toISODate(next);
   };
 

@@ -51,14 +51,39 @@ const at = (ymd, hour, min = 0) => `${compact(ymd)}T${pad(hour)}${pad(min)}00`;
 // Events land at 8am local so reminders arrive during the work day.
 const EVENT_HOUR = 8;
 
-// RFC 5545 line folding: continuation lines start with a single space.
+const utf8 = new TextEncoder();
+
+/**
+ * RFC 5545 §3.1 line folding: no line may exceed 75 OCTETS, and a continuation
+ * begins with a single space that counts toward its own limit.
+ *
+ * Octets, not characters — the distinction matters as soon as a name is not
+ * plain ASCII. An accented letter is two bytes, a CJK character three, an emoji
+ * four, so counting characters let a line reach 217 octets here.
+ *
+ * Folding also walks code points rather than UTF-16 units, because slicing a
+ * string mid-surrogate cuts an emoji in half and produces invalid UTF-8 — the
+ * kind of corruption that survives right up until something refuses to parse it.
+ */
 const fold = (line) => {
-  if (line.length <= 73) return line;
-  const parts = [line.slice(0, 73)];
-  let rest = line.slice(73);
-  while (rest.length > 72) { parts.push(' ' + rest.slice(0, 72)); rest = rest.slice(72); }
-  if (rest.length) parts.push(' ' + rest);
-  return parts.join('\r\n');
+  if (utf8.encode(line).length <= 75) return line;
+  const parts = [];
+  let cur = '';
+  let bytes = 0;
+  let limit = 75;              // a continuation spends one octet on its space
+  for (const ch of line) {     // by code point, so a surrogate pair stays whole
+    const size = utf8.encode(ch).length;
+    if (bytes + size > limit) {
+      parts.push(cur);
+      cur = '';
+      bytes = 0;
+      limit = 74;
+    }
+    cur += ch;
+    bytes += size;
+  }
+  if (cur) parts.push(cur);
+  return parts[0] + parts.slice(1).map((p) => '\r\n ' + p).join('');
 };
 
 const recurrenceRule = (m) => {

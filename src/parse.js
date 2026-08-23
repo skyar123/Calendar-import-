@@ -128,7 +128,12 @@ function extractName(line, firstDateIndex) {
   // a comma, so a name with more than one comma is left exactly as pasted.
   const swap = head.match(/^([A-Za-z'’\-.][A-Za-z'’\-.\s]*),\s*([A-Za-z][A-Za-z'’\-.\s]*)$/);
   if (swap) head = `${swap[2].trim()} ${swap[1].trim()}`;
-  return head.replace(/[\s,]+$/, '').trim();
+  head = head.replace(/[\s,]+$/, '').trim();
+  // A name this long is a mis-parse, not a name — usually a line whose first
+  // date sits far to the right, dragging everything before it into the name.
+  // Left whole it also blows the layout sideways, so it is capped here rather
+  // than papered over in CSS.
+  return head.length > 80 ? `${head.slice(0, 79).trimEnd()}…` : head;
 }
 
 const HEADER_HINTS = /\b(name|client|child|dob|birth|intake|admission|admit|caregiver|parent)\b/i;

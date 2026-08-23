@@ -19,6 +19,14 @@ export default function Styles() {
 button, a, select, input, textarea { touch-action:manipulation; }
 .app { min-height:100vh; background:var(--paper); color:var(--ink); font-family:'Albert Sans',system-ui,sans-serif; font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased; }
 .shell { max-width:44rem; margin:0 auto; padding:0 1.1rem 4rem; }
+/* Client names are arbitrary text. A long unbroken one used to widen the page
+   by tens of thousands of pixels, so wrapping is forced everywhere text lands
+   rather than trusted to break on spaces. */
+.app { overflow-x:hidden; }
+.case-name, .case-meta, .pick-name, .pick-meta, .sched-label, .up-label,
+.items, .due-chip, .dupe-tag, .absent-box, .preview-line, .toast, .issue {
+  overflow-wrap:anywhere; word-break:break-word; min-width:0;
+}
 
 .flex { display:flex; } .flex-wrap { flex-wrap:wrap; } .flex-1 { flex:1 1 0%; }
 .items-center { align-items:center; } .min-w-0 { min-width:0; }
