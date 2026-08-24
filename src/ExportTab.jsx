@@ -8,8 +8,8 @@ import {
   Package, RotateCcw, Save, Settings2, Undo2,
 } from 'lucide-react';
 
-import { CATEGORY_LABELS, DEFAULT_LEAD_TIMES, formatDate } from './rules.js';
-import { buildClientIcs, countPastDates, displayName } from './ics.js';
+import { CATEGORY_LABELS, DEFAULT_LEAD_TIMES, formatDate, todayISO } from './rules.js';
+import { buildClientIcs, clientTag, countPastDates, displayName } from './ics.js';
 
 export const CATEGORY_ORDER = [
   'birthday', 'baseline', 'treatmentPlan', 'sniff', 'sixMonth',
@@ -18,7 +18,7 @@ export const CATEGORY_ORDER = [
 
 export default function ExportTab({
   clients, setClients, leadTimes, setLeadTimes, categories, setCategories,
-  nameStyle, setNameStyle, skipPast, setSkipPast, headsUp, setHeadsUp,
+  skipPast, setSkipPast, headsUp, setHeadsUp,
   removals, setRemovals, exportRemovals, lastBackup,
   exportClient, exportAllCombined, exportAllZipped, backup, restore,
 }) {
@@ -30,8 +30,6 @@ export default function ExportTab({
   }, { total: 0, dues: 0 }), [on, categories, skipPast, headsUp, leadTimes]);
   const pastCount = useMemo(() => countPastDates(on, { categories }), [on, categories]);
   const setSkip = (id, skip) => setClients((prev) => prev.map((c) => (c.id === id ? { ...c, skip } : c)));
-  const setNickname = (id, nickname) => setClients((prev) => prev.map((c) => (c.id === id ? { ...c, nickname } : c)));
-  const missingNicknames = useMemo(() => on.filter((c) => !(c.nickname || '').trim()).length, [on]);
   const dischargedNames = useMemo(() => [...new Set(removals.map((r) => r.label).filter(Boolean))], [removals]);
   // Stale once the caseload has changed since the backup, or a fortnight has
   // gone by, or there has never been one at all.
@@ -102,33 +100,12 @@ export default function ExportTab({
         <div className="per-client mt-4">
           <div className="field-label">Names inside the calendar</div>
           <p className="hint">
-            A calendar file travels — onto a phone, into a synced account, in front of
-            everyone the calendar is shared with, and it cannot be unshared. So full names
-            never go into one. Names stay here, where you need them to tell clients apart;
-            only initials or a nickname leave.
-            {nameStyle === 'nickname' && missingNicknames > 0
-              ? ` ${missingNicknames} client${missingNicknames === 1 ? ' has' : 's have'} no nickname yet — ${missingNicknames === 1 ? 'that one falls' : 'those fall'} back to initials.`
-              : ''}
+            Entries go out as initials, date of birth, and the child&apos;s age in months on
+            the deadline — <strong>{clients.length ? clientTag(on[0] || clients[0], todayISO()) : 'A.R. 4/12/2024 (27 mo)'}</strong>.
+            Full names are never written into a calendar file: it travels onto phones, into
+            synced accounts and in front of everyone it is shared with, and it cannot be
+            unshared. The names stay in this browser, where you need them.
           </p>
-          <div className="flex gap-2 flex-wrap mt-2">
-            <button
-              className={'seg ' + (nameStyle === 'initials' ? 'seg-on' : '')}
-              onClick={() => setNameStyle('initials')}
-            >
-              Initials
-            </button>
-            <button
-              className={'seg ' + (nameStyle === 'nickname' ? 'seg-on' : '')}
-              onClick={() => setNameStyle('nickname')}
-            >
-              Nicknames
-            </button>
-          </div>
-          {clients.length > 0 && (
-            <div className="preview-line mt-2">
-              Events will read <strong>{displayName(on[0] || clients[0], nameStyle)} — 6-month reassessment due</strong>
-            </div>
-          )}
         </div>
 
         {clients.length > 0 && (
@@ -143,7 +120,6 @@ export default function ExportTab({
             <p className="hint mt-2">
               Unticking leaves a client out of both downloads above. The arrow grabs
               that one client on its own.
-              {nameStyle === 'nickname' ? ' Type each nickname here — blank falls back to initials.' : ''}
             </p>
             {clients.map((c) => {
               const built = buildClientIcs(c, { categories, skipPast, headsUp, leadTimes });
@@ -154,23 +130,11 @@ export default function ExportTab({
                     <span className="min-w-0">
                       <span className="pick-name">{c.name || 'Unnamed client'}</span>
                       <span className="pick-meta">
-                        goes in as <strong>{displayName(c, nameStyle)}</strong> · {built.dueCount} deadline{built.dueCount === 1 ? '' : 's'}
+                        goes in as <strong>{displayName(c)}</strong> · {built.dueCount} deadline{built.dueCount === 1 ? '' : 's'}
                         {headsUp && built.count > built.dueCount ? ` · ${built.count - built.dueCount} warnings` : ''}
                       </span>
                     </span>
                   </label>
-                  {nameStyle === 'nickname' && (
-                    <input
-                      className="in nick-in"
-                      value={c.nickname || ''}
-                      placeholder={displayName(c, 'initials')}
-                      onChange={(e) => setNickname(c.id, e.target.value)}
-                      aria-label={`Nickname for ${c.name || 'this client'}`}
-                    />
-                  )}
-                  <button className="icon-btn" onClick={() => exportClient(c)} title={`Download just ${c.name || 'this client'}`}>
-                    <Download size={15} />
-                  </button>
                 </div>
               );
             })}

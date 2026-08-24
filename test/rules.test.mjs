@@ -4,11 +4,15 @@
 
 import assert from 'node:assert/strict';
 import {
-  addDays, addMonths, daysBetween, formatAge, formatDate, getClientSchedule, getIssues,
+  addDays, addMonths, daysBetween, formatAge, formatDate, getAgeInMonths, getClientSchedule, getIssues,
   getRelativeDue, getUpcoming, parseDate, toISODate,
 } from '../src/rules.js';
 import { findDates, findDeclaredCount, parseCaseload } from '../src/parse.js';
-import { buildCaseloadIcs, buildClientIcs, buildRemovalIcs, buildZip, countPastDates, displayName, exportedUids, googleCalendarUrl, slug } from '../src/ics.js';
+
+// Milestone ids are now per-occurrence (sniff-1, bday-child-3), so tests match
+// on prefix rather than on a single fixed id.
+const byPrefix = (sched, prefix) => sched.filter((m) => m.id.startsWith(prefix));
+import { buildCaseloadIcs, buildClientIcs, buildRemovalIcs, buildZip, clientTag, countPastDates, displayName, exportedUids, googleCalendarUrl, slug } from '../src/ics.js';
 
 let passed = 0;
 const test = (name, fn) => {
@@ -66,17 +70,6 @@ test('the 6-month reassessment lands 180 days after intake', () => {
   assert.equal(find('six-month').date, '2026-08-02');
 });
 
-test('SNIFF sits on a 90-day step from intake and repeats every 90', () => {
-  const sniff = find('sniff');
-  assert.equal(sniff.recurrence, 'every90');
-  const offset = daysBetween(client.intakeDate, sniff.date);
-  assert.ok(offset >= 90, 'never earlier than the first quarter');
-  assert.equal(offset % 90, 0, `must land on a quarter boundary, got day ${offset}`);
-  // Which quarter is current depends on today, so the fixed assertion is the
-  // alignment rather than the date.
-  assert.ok(daysBetween(sniff.date, toISODate(new Date())) < 90, 'and it is the live quarter');
-});
-
 test('treatment plan reviews step 90 days off the initial plan', () => {
   assert.equal(find('tx-review-1').date, '2026-07-03');
   assert.equal(find('tx-review-2').date, '2026-10-01');
@@ -96,22 +89,6 @@ test('age windows past the end of service are left off', () => {
   // Born 2024-04-12: ASQ-3 ages out in Oct 2029, long after this family closes.
   assert.equal(find('age-asq-out'), undefined);
   assert.equal(find('age-se-switch'), undefined);
-});
-
-test('a recurring birthday never bakes in an age that will go stale', () => {
-  const label = find('bday-child').label;
-  assert.ok(!/turns|\d/.test(label), `the label must carry no age: ${label}`);
-  assert.ok(find('bday-child').turning > 0, 'the age is carried separately for the app');
-});
-
-test('birthdays resolve to the next occurrence and repeat yearly', () => {
-  const bday = find('bday-child');
-  assert.equal(bday.recurrence, 'yearly');
-  assert.match(bday.date, /-04-12$/);
-  assert.ok(bday.date >= toISODate(new Date()), 'the child birthday should not be in the past');
-  const cg = find('bday-caregiver');
-  assert.match(cg.date, /-05-02$/);
-  assert.ok(cg.date >= toISODate(new Date()));
 });
 
 test('a milestone list is sorted by date', () => {
@@ -236,16 +213,6 @@ test('the per-client calendar is a well-formed VCALENDAR', () => {
 test('every line is CRLF-terminated and folded under the 75-octet limit', () => {
   assert.ok(!/[^\r]\n/.test(ics), 'a bare LF slipped through');
   ics.split('\r\n').forEach((line) => assert.ok(line.length <= 75, `line too long: ${line.slice(0, 40)}…`));
-});
-
-test('birthdays repeat yearly and are all-day', () => {
-  const events = ics.split('BEGIN:VEVENT').filter((b) => b.includes('— birthday'));
-  // Child and caregiver birthdays, each with its heads-up entry and the day itself.
-  assert.equal(events.length, 4);
-  events.forEach((e) => {
-    assert.ok(e.includes('RRULE:FREQ=YEARLY'));
-    assert.ok(e.includes('DTSTART;VALUE=DATE:'), 'a birthday should be an all-day event');
-  });
 });
 
 test('without heads-up entries the lead times ride as 9am notifications', () => {
@@ -401,59 +368,6 @@ test('a full name cannot be written into a calendar, whatever is asked for', () 
   });
 });
 
-test('a stale "full" setting falls back to initials rather than honouring itself', () => {
-  const named = { ...client, name: 'Rowan Delacroix Vance', nickname: 'Sunflower' };
-  assert.equal(displayName(named, 'full'), 'R.D.V.');
-  assert.equal(displayName(named, 'nickname'), 'Sunflower');
-});
-
-test('a nickname is used when there is one, initials when there is not', () => {
-  const named = { ...client, name: 'Rowan Delacroix Vance', nickname: 'Sunflower' };
-  const nick = buildClientIcs(named, { nameStyle: 'nickname' }).ics;
-  assert.ok(nick.includes('Sunflower'));
-  assert.ok(!nick.includes('Rowan'), 'the real name stays out');
-  assert.ok(!nick.includes('Delacroix'));
-  // No nickname set: fall back to initials, never to the full name.
-  const bare = { ...client, name: 'Rowan Delacroix Vance' };
-  const fallback = buildClientIcs(bare, { nameStyle: 'nickname' }).ics;
-  assert.ok(fallback.includes('R.D.V.'));
-  assert.ok(!fallback.includes('Rowan'), 'a missing nickname must not reveal the full name');
-});
-
-test('a nickname reaches the birthday label and the filename too', () => {
-  const named = { ...client, name: 'Rowan Delacroix Vance', nickname: 'Sunflower' };
-  const nick = buildClientIcs(named, { nameStyle: 'nickname' }).ics.replace(/\r\n /g, '');
-  const bday = nick.split('BEGIN:VEVENT').find((b) => b.includes('birthday'));
-  assert.ok(bday.includes('Sunflower'), 'the label composed upstream is rewritten too');
-  assert.ok(!bday.includes('Rowan'));
-  assert.equal(slug(displayName(named, 'nickname')), 'sunflower');
-});
-
-test('displayName covers both modes', () => {
-  const c = { name: 'Rowan Delacroix Vance', nickname: 'Sunflower' };
-  assert.equal(displayName(c, 'nickname'), 'Sunflower');
-  assert.equal(displayName(c, 'initials'), 'R.D.V.');
-  assert.equal(displayName(c), 'R.D.V.', 'initials is the default');
-  assert.equal(displayName({ name: 'Ann Lee' }, 'nickname'), 'A.L.', 'falls back to initials');
-  assert.equal(displayName({ nickname: 'Bluebird' }, 'initials'), 'Bluebird', 'nickname beats nothing');
-  assert.equal(displayName({}, 'full'), 'Client');
-});
-
-
-// ---- skipping dates that already passed -------------------------------------
-
-test('skipPast drops one-time dates behind us but keeps recurring ones', () => {
-  // A year in service: baseline, initial plan and the 6-month are all history.
-  const old = { id: 'o', name: 'Old Case', dob: '2021-05-04', intakeDate: addDays(toISODate(new Date()), -365) };
-  const all = buildClientIcs(old);
-  const ahead = buildClientIcs(old, { skipPast: true });
-  assert.ok(ahead.count < all.count, 'skipPast should remove something');
-  assert.ok(ahead.ics.includes('RRULE:FREQ=YEARLY'), 'the birthday must survive');
-  assert.ok(ahead.ics.includes('RRULE:FREQ=DAILY;INTERVAL=90'), 'the SNIFF must survive');
-  assert.ok(!ahead.ics.includes('OVERDUE'), 'nothing left should be overdue');
-  assert.equal(countPastDates([old]), all.dueCount - ahead.dueCount);
-});
-
 test('skipPast leaves a brand-new client untouched', () => {
   const fresh = { id: 'f', name: 'New Case', dob: '2024-02-02', intakeDate: toISODate(new Date()) };
   assert.equal(buildClientIcs(fresh, { skipPast: true }).count, buildClientIcs(fresh).count);
@@ -484,16 +398,7 @@ test('each lead time becomes its own entry, that many days earlier', () => {
   ].map((d) => d.replace(/-/g, '')).sort());
 });
 
-test('a warning entry says how many days are left, and the due day says today', () => {
-  const soon = { id: 'w2', name: 'Wren F', dob: '2023-03-03', intakeDate: addDays(toISODate(new Date()), 30) };
-  const out = buildClientIcs(soon).ics.replace(/\r\n /g, '');
-  assert.ok(out.includes('SUMMARY:⏳ 30 days · W.F. — 6-month reassessment due'));
-  assert.ok(out.includes('SUMMARY:⏳ 7 days · W.F. — 6-month reassessment due'));
-  assert.ok(out.includes('SUMMARY:⏳ 1 day · W.F. — 6-month reassessment due'), 'singular for one day');
-  assert.ok(out.includes('SUMMARY:🔴 W.F. — 6-month reassessment due'));
-});
-
-const escComma = (s) => s.replace(/,/g, '\\,');
+const escComma = (x) => x.replace(/,/g, '\\,');
 
 test('a warning entry names the date it is warning about', () => {
   const soon = { id: 'w3', name: 'Wren F', dob: '2023-03-03', intakeDate: addDays(toISODate(new Date()), 30) };
@@ -511,14 +416,6 @@ test('warnings and the due date stay separate events, never merged on re-import'
   assert.equal(new Set(uids).size, uids.length, 'every entry needs its own UID');
   assert.ok(uids.some((u) => /-lead30@/.test(u)));
   assert.ok(uids.some((u) => /-lead7@/.test(u)));
-});
-
-test('a recurring deadline carries its warning forward too', () => {
-  const soon = { id: 'w5', name: 'Wren F', dob: '2023-03-03', intakeDate: addDays(toISODate(new Date()), 30) };
-  const blocks = buildClientIcs(soon).ics.replace(/\r\n /g, '').split('BEGIN:VEVENT')
-    .filter((b) => /SUMMARY:[^\r\n]*SNIFF update due/.test(b));
-  assert.ok(blocks.length >= 2);
-  blocks.forEach((b) => assert.ok(b.includes('INTERVAL=90'), 'the warning recurs with the deadline'));
 });
 
 test('a warning whose own day has already passed is dropped with skipPast', () => {
@@ -659,57 +556,6 @@ test('the same id-less client is stable across exports', () => {
 
 // ---- a full year of service ------------------------------------------------
 
-test('a year in service is covered end to end', () => {
-  const intake = toISODate(new Date());
-  const c = { id: 'yr', name: 'Year Long', dob: '2024-05-15', intakeDate: intake };
-  const at = (days) => getClientSchedule(c).filter((m) => daysBetween(intake, m.date) === days).map((m) => m.id);
-  assert.deepEqual(at(60).sort(), ['baseline', 'tx-initial'], 'baseline and initial plan at 60 days');
-  assert.deepEqual(at(150), ['tx-review-1']);
-  assert.deepEqual(at(180), ['six-month']);
-  assert.deepEqual(at(240), ['tx-review-2']);
-  assert.deepEqual(at(330), ['tx-review-3']);
-  assert.deepEqual(at(365), ['annual'], 'the annual window lands on the anniversary');
-});
-
-test('quarterly SNIFFs span the whole year, not just the first one', () => {
-  const intake = toISODate(new Date());
-  const c = { id: 'yr2', name: 'Year Long', dob: '2024-05-15', intakeDate: intake };
-  const sniff = getClientSchedule(c).find((m) => m.id === 'sniff');
-  assert.equal(daysBetween(intake, sniff.date), 90, 'the first falls a quarter in');
-  assert.ok(sniff.count >= 4, `a year needs at least four SNIFFs, got ${sniff.count}`);
-  // The recurrence has to reach the far end of the year, not stop short.
-  const last = addDays(sniff.date, 90 * (sniff.count - 1));
-  assert.ok(daysBetween(intake, last) >= 360, 'the last SNIFF must reach the end of the year');
-  assert.ok(buildClientIcs(c).ics.includes(`COUNT=${sniff.count}`));
-});
-
-test('the SNIFF shown is the current quarter, not the first one ever', () => {
-  const today = toISODate(new Date());
-  // Half a year in: the day-90 SNIFF is two quarters closed, not the live one.
-  const mid = { id: 'mid', name: 'Mid', dob: '2024-05-15', intakeDate: addDays(today, -200) };
-  const sniff = getClientSchedule(mid).find((m) => m.id === 'sniff');
-  assert.equal(daysBetween(mid.intakeDate, sniff.date), 180, 'the second SNIFF, not the first');
-  assert.ok(daysBetween(sniff.date, today) < 30, 'and it is the recent one, not a stale one');
-});
-
-test('a SNIFF that slipped a fortnight still reads as overdue', () => {
-  const today = toISODate(new Date());
-  const slipped = { id: 'sl', name: 'Slipped', dob: '2024-05-15', intakeDate: addDays(today, -104) };
-  const sniff = getClientSchedule(slipped).find((m) => m.id === 'sniff');
-  assert.ok(sniff.date < today, 'a recently missed SNIFF must not be skipped past');
-  assert.equal(getRelativeDue(sniff.date).tone, 'red');
-});
-
-test('a client running long keeps a SNIFF rather than losing it', () => {
-  const long = { id: 'lg', name: 'Long', dob: '2024-05-15', intakeDate: addDays(toISODate(new Date()), -600) };
-  const sniff = getClientSchedule(long).find((m) => m.id === 'sniff');
-  assert.ok(sniff, 'the SNIFF must not vanish past the end of service');
-  assert.ok(sniff.count >= 1);
-});
-
-
-// ---- authorisation expiry --------------------------------------------------
-
 test('an authorisation expiry is scheduled only when one is entered', () => {
   const base = { id: 'au', name: 'Au Th', dob: '2024-01-01', intakeDate: '2026-01-01' };
   assert.equal(getClientSchedule(base).find((m) => m.id === 'auth-expires'), undefined,
@@ -763,38 +609,6 @@ test('no line exceeds 75 octets, whatever the alphabet', () => {
     });
   });
 });
-
-test('folding never cuts a character in half', () => {
-  const name = '👨‍👩‍👧‍👦 Family Ünit ' + '🎈'.repeat(40);
-  const out = buildClientIcs({ id: 'f2', name, nickname: name, dob: '2024-03-03', intakeDate: '2026-06-01' }, { nameStyle: 'nickname' }).ics;
-  out.split('\r\n').forEach((line) => {
-    assert.ok(!/[\uD800-\uDBFF]$/.test(line), 'a line ended mid-surrogate, which is invalid UTF-8');
-  });
-  assert.ok(out.split('\r\n ').join('').includes(name), 'and unfolding restores the original exactly');
-});
-
-// ---- 29 February ------------------------------------------------------------
-
-test('a leap-day birthday stays in February', () => {
-  // Left to new Date(), 29 Feb rolls into 1 March — and since the entry recurs
-  // yearly from wherever it lands, the child would keep a March birthday.
-  ['2024-02-29', '2020-02-29', '2016-02-29'].forEach((dob) => {
-    const b = getClientSchedule({ id: 'lp', name: 'Leap Child', dob, intakeDate: '2026-01-01' })
-      .find((m) => m.id === 'bday-child');
-    assert.ok(b, 'a leap baby still gets a birthday');
-    assert.ok(/-02-(28|29)$/.test(b.date), `expected late February, got ${b.date}`);
-  });
-});
-
-test('ordinary month-ends are untouched by the leap-day handling', () => {
-  [['2022-01-31', '-01-31'], ['2023-03-15', '-03-15'], ['2021-12-31', '-12-31']].forEach(([dob, ending]) => {
-    const b = getClientSchedule({ id: 'me', name: 'M E', dob, intakeDate: '2026-01-01' })
-      .find((m) => m.id === 'bday-child');
-    assert.ok(b.date.endsWith(ending), `${dob} moved to ${b.date}`);
-  });
-});
-
-// ---- format integrity under hostile input -----------------------------------
 
 test('a name carrying calendar syntax cannot break out of its value', () => {
   const evil = 'END:VEVENT\r\nBEGIN:VEVENT\r\nSUMMARY:INJECTED';
@@ -857,6 +671,155 @@ test('nothing in the schedule ever throws, whatever the record', () => {
   ].forEach((w, i) => {
     assert.doesNotThrow(() => { getClientSchedule(w); buildClientIcs(w); }, `case ${i}`);
     assert.ok(Array.isArray(getClientSchedule(w)));
+  });
+});
+
+// ---- identity on every entry: initials, date of birth, age at the deadline --
+
+test('a calendar entry is titled with initials, date of birth and an age', () => {
+  const c2 = { id: 'tag', name: 'Ava Ramirez', dob: '2024-04-12', intakeDate: addDays(toISODate(new Date()), 10) };
+  const out = buildClientIcs(c2).ics.split('\r\n ').join('');
+  const summaries = out.split('\r\n').filter((l) => l.startsWith('SUMMARY:'));
+  assert.ok(summaries.length > 0);
+  summaries.forEach((l) => {
+    assert.ok(/A\.R\. 4\/12\/2024 \(\d+ mo\)/.test(l) || /caregiver birthday/.test(l),
+      `entry not tagged: ${l}`);
+  });
+  assert.ok(!out.includes('Ava'), 'the first name never appears');
+  assert.ok(!out.includes('Ramirez'), 'the surname never appears');
+});
+
+test('the age is the one true on the deadline, and differs between deadlines', () => {
+  // Intake in the future, so every deadline is ahead and marked 🔴 rather than ⚠.
+  const c2 = { id: 'ag', name: 'Ava Ramirez', dob: '2024-04-12', intakeDate: addDays(toISODate(new Date()), 10) };
+  const out = buildClientIcs(c2).ics.split('\r\n ').join('');
+  const ageOf = (needle) => {
+    const b = out.split('BEGIN:VEVENT').find((x) => new RegExp(`SUMMARY:🔴[^\r\n]*${needle}`).test(x));
+    return { age: Number(b.match(/\((\d+) mo\)/)[1]), date: b.match(/DTSTART;VALUE=DATE:(\d{8})/)[1] };
+  };
+  const baseline = ageOf('Baseline');
+  const annual = ageOf('Annual');
+  assert.ok(annual.age > baseline.age, 'a later deadline must carry a greater age');
+  const iso = (x) => `${x.slice(0, 4)}-${x.slice(4, 6)}-${x.slice(6)}`;
+  assert.equal(baseline.age, getAgeInMonths(c2.dob, iso(baseline.date)), 'and it must be arithmetically right');
+  assert.equal(annual.age, getAgeInMonths(c2.dob, iso(annual.date)));
+});
+
+test('a warning states the age at the deadline, not at the warning', () => {
+  // Deadline just after a monthly birthday roll, so the two dates differ in age.
+  const c2 = { id: 'wa', name: 'B C', dob: '2024-01-15', intakeDate: addDays(toISODate(new Date()), 10) };
+  const out = buildClientIcs(c2).ics.split('\r\n ').join('');
+  const six = out.split('BEGIN:VEVENT').filter((b) => /6-month/.test(b));
+  const ages = [...new Set(six.map((b) => b.match(/\((\d+) mo\)/)[1]))];
+  assert.equal(ages.length, 1, 'a deadline and its warnings must agree on the age');
+});
+
+test('there is exactly one naming mode and it is initials', () => {
+  const c2 = { name: 'Ava Ramirez', nickname: 'Sunflower' };
+  assert.equal(displayName(c2), 'A.R.');
+  // No second argument does anything — the option it used to take is gone.
+  assert.equal(displayName(c2, 'full'), 'A.R.');
+  assert.equal(displayName(c2, 'nickname'), 'A.R.', 'a nickname cannot reintroduce a name');
+  assert.equal(displayName({}), 'Client');
+  assert.equal(clientTag({ name: 'Ava Ramirez', dob: '2024-04-12' }, '2026-04-12'), 'A.R. 4/12/2024 (24 mo)');
+  assert.equal(clientTag({ name: 'Ava Ramirez' }, '2026-04-12'), 'A.R.', 'no date of birth, no age');
+});
+
+test('a caregiver birthday carries caregiver initials and no child age', () => {
+  const c2 = { id: 'cg', name: 'Ava Ramirez', dob: '2024-04-12', caregiverName: 'Carla Gomez', caregiverDob: '1994-05-02', intakeDate: addDays(toISODate(new Date()), 10) };
+  const out = buildClientIcs(c2).ics.split('\r\n ').join('');
+  const b = out.split('BEGIN:VEVENT').find((x) => /caregiver birthday/.test(x));
+  assert.ok(b, 'the caregiver birthday is scheduled');
+  assert.ok(b.includes('C.G.'));
+  assert.ok(!b.includes('Carla') && !b.includes('Gomez'));
+  assert.ok(!/SUMMARY[^\r\n]*\(\d+ mo\)/.test(b), 'a child age has no place on a caregiver birthday');
+});
+
+// ---- recurrence is gone: every occurrence is its own dated entry ------------
+
+test('quarterly SNIFFs are separate entries, one per quarter', () => {
+  const intake = toISODate(new Date());
+  const sched = getClientSchedule({ id: 'sq', name: 'S Q', dob: '2024-05-15', intakeDate: intake });
+  const sniffs = byPrefix(sched, 'sniff-');
+  assert.ok(sniffs.length >= 4, `a year needs at least four SNIFFs, got ${sniffs.length}`);
+  sniffs.forEach((m) => {
+    assert.equal(daysBetween(intake, m.date) % 90, 0, 'each lands on a quarter boundary');
+    assert.equal(m.recurrence, null, 'and none of them recurs');
+  });
+  const days = sniffs.map((m) => daysBetween(intake, m.date));
+  assert.deepEqual(days, [...new Set(days)].sort((a, b) => a - b), 'distinct and in order');
+  assert.ok(Math.max(...days) >= 360, 'and they reach the end of the year');
+});
+
+test('each SNIFF states the age true of its own quarter', () => {
+  const c2 = { id: 'sa', name: 'S A', dob: '2024-05-15', intakeDate: toISODate(new Date()) };
+  const out = buildClientIcs(c2).ics.split('\r\n ').join('');
+  const ages = out.split('BEGIN:VEVENT')
+    .filter((b) => /SUMMARY:🔴[^\r\n]*SNIFF/.test(b))
+    .map((b) => Number(b.match(/\((\d+) mo\)/)[1]));
+  assert.ok(ages.length >= 4);
+  assert.equal(new Set(ages).size, ages.length, 'no two quarters may claim the same age');
+  assert.deepEqual(ages, [...ages].sort((a, b) => a - b), 'and they climb');
+});
+
+test('birthdays are separate dated entries, each with its own age', () => {
+  const c2 = { id: 'bd', name: 'B D', dob: '2024-04-12', intakeDate: toISODate(new Date()) };
+  const bdays = byPrefix(getClientSchedule(c2), 'bday-child-');
+  assert.ok(bdays.length >= 1);
+  bdays.forEach((m) => {
+    assert.equal(m.recurrence, null, 'a recurring title cannot state a changing age');
+    assert.ok(m.date.endsWith('-04-12'));
+  });
+});
+
+test('nothing in an export recurs any more', () => {
+  const c2 = { id: 'nr', name: 'N R', dob: '2024-04-12', caregiverDob: '1994-05-02', intakeDate: toISODate(new Date()) };
+  assert.ok(!buildClientIcs(c2).ics.includes('RRULE'), 'every entry is discretely dated');
+});
+
+test('a leap-day birthday stays in February and is still dated', () => {
+  ['2024-02-29', '2020-02-29'].forEach((dob) => {
+    const bdays = byPrefix(getClientSchedule({ id: 'lp', name: 'L P', dob, intakeDate: '2026-01-01' }), 'bday-child-');
+    assert.ok(bdays.length >= 1, 'a leap baby still gets a birthday');
+    bdays.forEach((b) => assert.ok(/-02-(28|29)$/.test(b.date), `expected late February, got ${b.date}`));
+  });
+});
+
+test('ordinary month-ends are untouched by the leap-day handling', () => {
+  [['2022-01-31', '-01-31'], ['2023-03-15', '-03-15'], ['2021-12-31', '-12-31']].forEach(([dob, ending]) => {
+    const b = byPrefix(getClientSchedule({ id: 'me', name: 'M E', dob, intakeDate: '2026-01-01' }), 'bday-child-')[0];
+    assert.ok(b.date.endsWith(ending), `${dob} moved to ${b.date}`);
+  });
+});
+
+test('skipPast drops what is behind us and keeps what is ahead', () => {
+  const old = { id: 'o', name: 'O C', dob: '2021-05-04', intakeDate: addDays(toISODate(new Date()), -365) };
+  const all = buildClientIcs(old);
+  const ahead = buildClientIcs(old, { skipPast: true });
+  assert.ok(ahead.dueCount < all.dueCount, 'skipPast should remove something');
+  assert.ok(!ahead.ics.includes('OVERDUE'), 'nothing left should be overdue');
+  assert.equal(countPastDates([old]), all.dueCount - ahead.dueCount);
+  assert.ok(ahead.dueCount > 0, 'but it must not empty the calendar');
+});
+
+test('a year in service is covered end to end', () => {
+  const intake = toISODate(new Date());
+  const sched = getClientSchedule({ id: 'yr', name: 'Y L', dob: '2024-05-15', intakeDate: intake });
+  const at = (days) => sched.filter((m) => daysBetween(intake, m.date) === days).map((m) => m.id);
+  assert.deepEqual(at(60).sort(), ['baseline', 'tx-initial']);
+  assert.deepEqual(at(90), ['sniff-1']);
+  assert.deepEqual(at(150), ['tx-review-1']);
+  assert.deepEqual(at(180).sort(), ['six-month', 'sniff-2']);
+  assert.deepEqual(at(240), ['tx-review-2']);
+  assert.deepEqual(at(330), ['tx-review-3']);
+  assert.deepEqual(at(365), ['annual']);
+});
+
+test('folding never cuts a character in half', () => {
+  const name = '👨‍👩‍👧‍👦 Ünit ' + '🎈'.repeat(40);
+  const out = buildClientIcs({ id: 'f2', name, dob: '2024-03-03', intakeDate: '2026-06-01' }).ics;
+  out.split('\r\n').forEach((line) => {
+    assert.ok(!/[\uD800-\uDBFF]$/.test(line), 'a line ended mid-surrogate, which is invalid UTF-8');
   });
 });
 

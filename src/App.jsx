@@ -6,7 +6,7 @@ import {
 
 import {
   CATEGORY_LABELS, DEFAULT_LEAD_TIMES, formatAge, formatDate, getClientSchedule,
-  getIssues, getOverdue, getRelativeDue, getUpcoming, parseDate, todayISO,
+  getAgeInMonths, getIssues, getOverdue, getRelativeDue, getUpcoming, parseDate, todayISO,
 } from './rules.js';
 import { parseCaseload, uid } from './parse.js';
 import {
@@ -81,9 +81,6 @@ export default function App() {
   const [clients, setClients] = useState([]);
   const [leadTimes, setLeadTimes] = useState(DEFAULT_LEAD_TIMES);
   const [categories, setCategories] = useState(CATEGORY_ORDER);
-  // Initials by default: a calendar file travels further than the browser it
-  // was made in, and a shared one is read by the whole team.
-  const [nameStyle, setNameStyle] = useState('initials');
   const [skipPast, setSkipPast] = useState(true);
   const [headsUp, setHeadsUp] = useState(true);
   // Entries already sent to a calendar for clients who have since been
@@ -107,9 +104,6 @@ export default function App() {
         if (Array.isArray(saved.clients)) setClients(withUniqueIds(saved.clients));
         if (saved.leadTimes) setLeadTimes({ ...DEFAULT_LEAD_TIMES, ...saved.leadTimes });
         if (Array.isArray(saved.categories) && saved.categories.length) setCategories(saved.categories);
-        // 'full' was briefly an option. It is not one any more, and a stored
-        // preference must not resurrect it.
-        if (saved.nameStyle === 'nickname') setNameStyle('nickname');
         if (typeof saved.skipPast === 'boolean') setSkipPast(saved.skipPast);
         if (typeof saved.headsUp === 'boolean') setHeadsUp(saved.headsUp);
         if (Array.isArray(saved.removals)) setRemovals(saved.removals);
@@ -124,24 +118,24 @@ export default function App() {
   useEffect(() => {
     if (!loaded) return;
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ clients, leadTimes, categories, nameStyle, skipPast, headsUp, removals, lastBackup }));
+      localStorage.setItem(STORE_KEY, JSON.stringify({ clients, leadTimes, categories, skipPast, headsUp, removals, lastBackup }));
     } catch {
       /* private mode / quota — the export buttons still work */
     }
-  }, [clients, leadTimes, categories, nameStyle, skipPast, headsUp, removals, lastBackup, loaded]);
+  }, [clients, leadTimes, categories, skipPast, headsUp, removals, lastBackup, loaded]);
 
   const say = (message) => {
     setToast(message);
     setTimeout(() => setToast((t) => (t === message ? '' : t)), 3200);
   };
 
-  const exportOpts = { leadTimes, categories, nameStyle, skipPast, headsUp };
+  const exportOpts = { leadTimes, categories, skipPast, headsUp };
 
   // ---- exports ----
   const exportClient = (client) => {
     const { ics, count } = buildClientIcs(client, exportOpts);
     if (!count) return say('Nothing to export for this client yet — add an intake date or a birthday.');
-    downloadText(ics, `${slug(displayName(client, nameStyle))}-due-dates.ics`);
+    downloadText(ics, `${slug(displayName(client))}-due-dates.ics`);
     say(`${count} date${count === 1 ? '' : 's'} exported for ${client.name}.`);
   };
 
@@ -156,7 +150,7 @@ export default function App() {
     const files = clients
       .map((c) => ({ client: c, built: buildClientIcs(c, exportOpts) }))
       .filter(({ built }) => built.count > 0)
-      .map(({ client, built }) => ({ name: `${slug(displayName(client, nameStyle))}-due-dates.ics`, text: built.ics }));
+      .map(({ client, built }) => ({ name: `${slug(displayName(client))}-due-dates.ics`, text: built.ics }));
     if (!files.length) return say('No dates to export yet.');
     downloadBlob(buildZip(files), `child-first-calendars-${todayISO()}.zip`);
     say(`${files.length} client calendar${files.length === 1 ? '' : 's'} zipped.`);
@@ -166,7 +160,7 @@ export default function App() {
   // recorded until the removal file has actually been imported, since that is
   // the only thing that clears them from a calendar.
   const discharge = (client, { quiet = false } = {}) => {
-    const label = displayName(client, nameStyle);
+    const label = displayName(client);
     const marks = exportedUids(client, { leadTimes }).map((t) => ({ ...t, label }));
     setRemovals((prev) => [...prev, ...marks]);
     setClients((prev) => prev.filter((c) => c.id !== client.id));
@@ -181,7 +175,7 @@ export default function App() {
   };
 
   const backup = () => {
-    downloadText(JSON.stringify({ version: 1, savedAt: new Date().toISOString(), clients, leadTimes, categories, nameStyle, skipPast, headsUp, removals }, null, 2),
+    downloadText(JSON.stringify({ version: 1, savedAt: new Date().toISOString(), clients, leadTimes, categories, skipPast, headsUp, removals }, null, 2),
       `due-dates-backup-${todayISO()}.json`, 'application/json');
     setLastBackup({ at: new Date().toISOString(), count: clients.length });
     say('Backup saved.');
@@ -196,7 +190,6 @@ export default function App() {
         setClients(withUniqueIds(data.clients));
         if (data.leadTimes) setLeadTimes({ ...DEFAULT_LEAD_TIMES, ...data.leadTimes });
         if (Array.isArray(data.categories) && data.categories.length) setCategories(data.categories);
-        setNameStyle(data.nameStyle === 'nickname' ? 'nickname' : 'initials');
         if (typeof data.skipPast === 'boolean') setSkipPast(data.skipPast);
         if (typeof data.headsUp === 'boolean') setHeadsUp(data.headsUp);
         if (Array.isArray(data.removals)) setRemovals(data.removals);
@@ -261,7 +254,6 @@ export default function App() {
           <ExportTab
             clients={clients} setClients={setClients} leadTimes={leadTimes} setLeadTimes={setLeadTimes}
             categories={categories} setCategories={setCategories}
-            nameStyle={nameStyle} setNameStyle={setNameStyle}
             skipPast={skipPast} setSkipPast={setSkipPast}
             removals={removals} setRemovals={setRemovals} exportRemovals={exportRemovals}
             lastBackup={lastBackup}
@@ -763,7 +755,9 @@ function MilestoneRow({ client, m, included = true, onToggle }) {
       </div>
       <div className="min-w-0 flex-1">
         <div className="sched-label">
-          {m.category === 'birthday' && <Cake size={13} />} {m.label}
+          {m.category === 'birthday' && <Cake size={13} />}
+          {m.label.replace(`${client.name} — `, '')}
+          {client.dob ? <span className="turning"> · {getAgeInMonths(client.dob, m.date)} mo</span> : null}
           {m.turning ? <span className="turning"> · turns {m.turning}</span> : null}
         </div>
         <div className="sched-meta">
@@ -851,7 +845,9 @@ function UpcomingRow({ m }) {
       <div className="min-w-0 flex-1">
         <div className="up-label">
           {m.category === 'birthday' && <Cake size={13} />}
-          <strong>{m.client.name}</strong> — {m.label}
+          <strong>{displayName(m.client)}</strong>
+          <span className="turning"> {m.client.dob ? `${formatDate(m.client.dob)} · ${getAgeInMonths(m.client.dob, m.date)} mo` : ''}</span>
+          {' — '}{m.label.replace(`${m.client.name} — `, '')}
           {m.turning ? <span className="turning"> · turns {m.turning}</span> : null}
         </div>
         <div className="sched-meta">

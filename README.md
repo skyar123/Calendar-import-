@@ -155,28 +155,33 @@ scatters stale entries back through your calendar. This keeps the export
 forward-looking. Birthdays and the 90-day SNIFF are never dropped — their next
 occurrence is still ahead — and everything stays visible under *What's coming*.
 
-**How clients are named** — two choices, and **a full name is never one of them**.
+**How clients are identified.** Every entry reads:
 
-| Mode | An event reads | When |
-| --- | --- | --- |
-| **Initials** (default) | `R.D.V. — 6-month reassessment due` | Anything at all |
-| **Nicknames** | `Sunflower — 6-month reassessment due` | A shared team calendar — far easier to read than initials |
+```
+🔴 A.R. 4/12/2024 (27 mo) — 6-month reassessment due
+```
 
-A calendar file travels: onto a phone, into a synced account, onto a lock
-screen, in front of everyone the calendar is shared with — and it cannot be
-unshared. So a child's full name is never written into one. This is a floor, not
-a preference: an unrecognised setting, an old saved preference, a backup
-restored from an earlier version — all of them land on initials. There is no
-code path that produces a full name in a calendar file.
+Initials, date of birth, and the child's age in months. There is no setting:
+initials are the only mode, so there is nothing to get wrong, no stale
+preference or restored backup that can re-enable a name, and no code path that
+writes one into a file. A calendar travels onto phones, into synced accounts and
+in front of everyone it is shared with, and it cannot be unshared. The names
+stay in this browser, where you need them to tell clients apart.
 
-Nicknames are typed straight into the export list — one box per client, all in
-one place. **A client with no nickname falls back to initials, never to their
-full name**, so a blank box can't quietly reveal more than you asked for. The
-naming applies everywhere the name appears: event titles, the birthday labels,
-the caregiver line, and the downloaded filenames.
+The date of birth does the work a name used to: it separates two clients who
+share initials, and it is the thing you would look up anyway.
 
-Your full list stays in this browser regardless — the naming only affects what
-leaves in a calendar file.
+**The age is the one true on the deadline**, worked out per entry rather than
+once per client — it is what decides which instrument applies, so a warning
+states the age the child will be when the assessment is actually due, not the
+age they are on the day the warning appears. A deadline and its warnings always
+agree.
+
+For that age to stay honest, nothing recurs. A recurring entry carries one title
+across every occurrence, so an age written into it would be right once and wrong
+after; a quarterly SNIFF four quarters apart spans twelve months of a child's
+life. Each SNIFF and each birthday is therefore its own dated entry with its own
+age. Nothing in an export contains an `RRULE`.
 
 ## Choosing what goes in
 

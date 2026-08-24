@@ -7,7 +7,10 @@
 // leaves the browser.
 // ============================================================================
 
-import { addDays, CATEGORY_LABELS, DEFAULT_LEAD_TIMES, formatDate, getClientSchedule, parseDate, todayISO } from './rules.js';
+import {
+  addDays, CATEGORY_LABELS, DEFAULT_LEAD_TIMES, formatDate, getAgeInMonths,
+  getClientSchedule, parseDate, todayISO,
+} from './rules.js';
 
 const pad = (n) => String(n).padStart(2, '0');
 
@@ -112,25 +115,45 @@ const initialsOf = (full) => {
 };
 
 /**
- * How a client is named inside the calendar.
+ * How a client is named inside the calendar: their initials, always.
  *
- * A calendar file travels: onto a phone, into a synced account, onto a lock
- * screen, in front of every colleague the calendar is shared with. So a child's
- * full name is NEVER written into one. There are two modes — initials, and a
- * nickname the team already uses — and no third.
+ * A calendar file travels — onto a phone, into a synced account, onto a lock
+ * screen, in front of every colleague the calendar is shared with — and it
+ * cannot be unshared. There is one mode, so there is no setting to get wrong,
+ * nothing a stale preference or a restored backup can re-enable, and no code
+ * path that puts a child's name in a file. The name stays in the browser, where
+ * it is needed to tell clients apart.
  *
- * This is deliberately a floor rather than a preference. An unrecognised mode,
- * an old saved setting, a restored backup from before this rule: all of them
- * land on initials. Nothing routes to the full name, so nothing can regress
- * into leaking one. The full name stays in the browser, where it is needed to
- * tell clients apart, and goes no further.
+ * Identification comes from the date of birth in the title instead, which is
+ * what distinguishes two clients sharing initials.
  */
-export function displayName(client, nameStyle = 'initials') {
-  const full = (client?.name || '').trim();
-  const nickname = (client?.nickname || '').trim();
+export function displayName(client) {
+  return initialsOf(client?.name || '') || 'Client';
+}
 
-  if (nameStyle === 'nickname' && nickname) return nickname;
-  return initialsOf(full) || nickname || 'Client';
+// The date of birth as it goes in a title: short, unambiguous, sortable by eye.
+const dobLabel = (dob) => {
+  const d = parseDate(dob);
+  return d ? `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}` : '';
+};
+
+/**
+ * How a client is identified on one entry: initials, date of birth, and their
+ * age in months on the given date.
+ *
+ * The age is what decides which instrument applies — the M-CHAT window, the ASQ
+ * ranges, which social-emotional tool — so it is worked out per deadline rather
+ * than once per client. Callers pass the deadline's date, so a warning states
+ * the age the child will be when the assessment is due rather than the age they
+ * are on the day the warning appears.
+ */
+export function clientTag(client, onDate) {
+  const bits = [displayName(client)];
+  const dob = dobLabel(client?.dob);
+  if (dob) bits.push(dob);
+  const months = getAgeInMonths(client?.dob, onDate);
+  if (months != null && client?.dob) bits.push(`(${months} mo)`);
+  return bits.join(' ');
 }
 
 // One VEVENT, assembled from parts. Everything here is all-day: a deadline is a
@@ -178,9 +201,8 @@ function vevent({ uid, date, summary, body, rrule, alarms = [], category, color 
  * With `headsUp` off, it is one entry on the due date carrying the lead times as
  * plain VALARM notifications.
  */
-function milestoneEvents(client, m, leadTimes, nameStyle, headsUp, skipPast) {
+function milestoneEvents(client, m, leadTimes, headsUp, skipPast) {
   const out = [];
-  const name = displayName(client, nameStyle);
   const leads = [...(leadTimes[m.category] || DEFAULT_LEAD_TIMES[m.category] || [7, 1])]
     .filter((d) => Number.isFinite(d) && d >= 0)
     .sort((a, b) => b - a);
@@ -191,11 +213,11 @@ function milestoneEvents(client, m, leadTimes, nameStyle, headsUp, skipPast) {
   const category = CATEGORY_LABELS[m.category] || 'Due date';
   const baseUid = `${clientKey(client)}-${safeUid(m.id)}`;
 
-  // Birthday labels are composed in rules.js and already carry the person's
-  // name ("Ava Ramirez turns 3"), so initials mode has to reach inside them too.
-  const caregiver = displayName({ name: client.caregiverName }, nameStyle);
-  // Labels composed upstream (a birthday reads "<name> — birthday") carry the
-  // real name, so every one of them is rewritten. No mode skips this.
+  const name = displayName(client);
+  const caregiver = displayName({ name: client.caregiverName });
+
+  // Labels composed upstream carry the real name — a birthday reads
+  // "<name> — birthday" — so every one is rewritten before it can reach a file.
   const mask = (text) => {
     let out2 = String(text ?? '');
     const full = (client.name || '').trim();
@@ -205,9 +227,18 @@ function milestoneEvents(client, m, leadTimes, nameStyle, headsUp, skipPast) {
     return out2;
   };
 
-  const what = isBirthday ? mask(m.label) : `${name} — ${m.label}`;
+  // A caregiver's birthday is about the caregiver, so it carries their initials
+  // and no child age. Every other entry identifies the child: initials, date of
+  // birth, and the age in months ON THE DEADLINE — not on the warning's own
+  // day. The age is there to say which instrument applies when the assessment
+  // is actually done, so a warning and the deadline it warns about agree, even
+  // when a birthday falls between them.
+  const what = m.caregiver
+    ? `${caregiver} — caregiver birthday`
+    : `${clientTag(client, m.date)} — ${mask(m.label).replace(`${name} — `, '')}`;
   const detailLines = [];
-  if (m.detail) detailLines.push(mask(m.detail));
+  if (m.detail) detailLines.push(m.detail.split((client.name || '\u0000')).join(displayName(client))
+    .split((client.caregiverName || '\u0000')).join(caregiver));
   if (m.items?.length) detailLines.push(`Required: ${m.items.join(', ')}.`);
   if (client.caregiverName) detailLines.push(`Caregiver: ${caregiver}`);
   if (client.intakeDate) detailLines.push(`Intake: ${formatDate(client.intakeDate)}`);
@@ -387,8 +418,8 @@ export function buildRemovalIcs(tombstones) {
  * One .ics for one client — this is the per-client calendar.
  * `options.categories` limits which milestone categories are included.
  */
-export function buildClientIcs(client, { leadTimes = DEFAULT_LEAD_TIMES, categories = null, nameStyle = 'initials', skipPast = false, headsUp = true } = {}) {
-  const name = displayName(client, nameStyle);
+export function buildClientIcs(client, { leadTimes = DEFAULT_LEAD_TIMES, categories = null, skipPast = false, headsUp = true } = {}) {
+  const name = displayName(client);
   const schedule = includedSchedule(client, { categories, skipPast });
 
   const lines = [
@@ -402,7 +433,7 @@ export function buildClientIcs(client, { leadTimes = DEFAULT_LEAD_TIMES, categor
   ];
   let count = 0;
   schedule.forEach((m) => {
-    const events = milestoneEvents(client, m, leadTimes, nameStyle, headsUp, skipPast);
+    const events = milestoneEvents(client, m, leadTimes, headsUp, skipPast);
     count += events.filter((l) => l === 'BEGIN:VEVENT').length;
     lines.push(...events);
   });
@@ -412,7 +443,7 @@ export function buildClientIcs(client, { leadTimes = DEFAULT_LEAD_TIMES, categor
 }
 
 /** One .ics holding every client — handy for a single "everything" calendar. */
-export function buildCaseloadIcs(clients, { leadTimes = DEFAULT_LEAD_TIMES, categories = null, nameStyle = 'initials', skipPast = false, headsUp = true } = {}) {
+export function buildCaseloadIcs(clients, { leadTimes = DEFAULT_LEAD_TIMES, categories = null, skipPast = false, headsUp = true } = {}) {
   const lines = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
@@ -426,7 +457,7 @@ export function buildCaseloadIcs(clients, { leadTimes = DEFAULT_LEAD_TIMES, cate
   clients.filter((client) => !isClientOff(client)).forEach((client) => {
     includedSchedule(client, { categories, skipPast })
       .forEach((m) => {
-        const events = milestoneEvents(client, m, leadTimes, nameStyle, headsUp, skipPast);
+        const events = milestoneEvents(client, m, leadTimes, headsUp, skipPast);
         count += events.filter((l) => l === 'BEGIN:VEVENT').length;
         lines.push(...events);
       });

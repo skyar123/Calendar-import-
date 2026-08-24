@@ -210,9 +210,9 @@ export function getClientSchedule(client) {
   const intake = client.intakeDate;
   const pregnant = client.type === 'pregnant';
 
-  const push = (id, label, date, category, { items = [], detail = '', recurrence = null, turning = null, count = null } = {}) => {
+  const push = (id, label, date, category, { items = [], detail = '', recurrence = null, turning = null, count = null, caregiver = false } = {}) => {
     if (!date) return;
-    out.push({ id, label, date, category, items, detail, recurrence, turning, count });
+    out.push({ id, label, date, category, items, detail, recurrence, turning, count, caregiver });
   };
 
   // --- Birthdays: yearly, anchored on the next occurrence ---
@@ -226,9 +226,10 @@ export function getClientSchedule(client) {
     return new Date(year, month, Math.min(day, lastOfMonth));
   };
 
-  const nextBirthday = (dobStr) => {
+  const nextBirthday = (dobStr, fromYear = null) => {
     const dob = parseDate(dobStr);
     if (!dob) return null;
+    if (fromYear) return toISODate(onOrBefore(fromYear, dob.getMonth(), dob.getDate()));
     let year = new Date().getFullYear();
     let next = onOrBefore(year, dob.getMonth(), dob.getDate());
     // Compare on date only, so today's birthday still counts as today.
@@ -236,25 +237,39 @@ export function getClientSchedule(client) {
     return toISODate(next);
   };
 
+  // Birthdays are emitted as discrete dated entries rather than one yearly
+  // recurrence. A recurring entry carries a single title across every
+  // occurrence, so any age written into it is right once and wrong after —
+  // and the age is the reason the date is on the calendar at all.
+  const birthdayHorizon = intake
+    ? addDays(intake, INTERVALS.ANNUAL_DAYS + 90)
+    : addDays(todayISO(), 400);
+
   if (client.dob) {
-    const d = nextBirthday(client.dob);
-    const turning = d ? parseDate(d).getFullYear() - parseDate(client.dob).getFullYear() : null;
-    // The age stays out of the label: this event recurs yearly in the exported
-    // calendar, so a baked-in "turns 6" would still read "turns 6" the year they
-    // turn 7. `turning` is carried alongside for the in-app view, which is
-    // recomputed on every render and so is always current.
-    push('bday-child', `${client.name || 'Child'} — birthday`, d, 'birthday', {
-      detail: `Birthday. Born ${formatDate(client.dob)}${turning ? ` — turning ${turning} this year` : ''}.`,
-      recurrence: 'yearly',
-      turning,
-    });
+    let d = nextBirthday(client.dob);
+    let n = 0;
+    while (d && d <= birthdayHorizon && n < 6) {
+      const turning = parseDate(d).getFullYear() - parseDate(client.dob).getFullYear();
+      push(`bday-child-${turning}`, `${client.name || 'Child'} — birthday`, d, 'birthday', {
+        detail: `Birthday. Born ${formatDate(client.dob)} — turning ${turning}.`,
+        turning,
+      });
+      d = nextBirthday(client.dob, parseDate(d).getFullYear() + 1);
+      n++;
+    }
   }
   if (client.caregiverDob) {
-    const d = nextBirthday(client.caregiverDob);
-    push('bday-caregiver', `${client.caregiverName || 'Caregiver'} — birthday`, d, 'birthday', {
-      detail: `Caregiver birthday. Born ${formatDate(client.caregiverDob)}.`,
-      recurrence: 'yearly',
-    });
+    let d = nextBirthday(client.caregiverDob);
+    let n = 0;
+    while (d && d <= birthdayHorizon && n < 6) {
+      push(`bday-caregiver-${parseDate(d).getFullYear()}`,
+        `${client.caregiverName || 'Caregiver'} — birthday`, d, 'birthday', {
+          detail: `Caregiver birthday. Born ${formatDate(client.caregiverDob)}.`,
+          caregiver: true,
+        });
+      d = nextBirthday(client.caregiverDob, parseDate(d).getFullYear() + 1);
+      n++;
+    }
   }
 
   if (!intake) return sortByDate(out); // no intake date → birthdays only
@@ -293,13 +308,10 @@ export function getClientSchedule(client) {
   }
 
   // --- SNIFF every 90 days ---
-  // Anchored on the CURRENT quarter's SNIFF, not the first one ever. Left on the
-  // first, a client half a year into service would show a SNIFF permanently
-  // months overdue while the one actually coming up went unmentioned, and the
-  // calendar would carry occurrences from quarters already closed.
-  //
-  // "Current" allows a month of grace, so a SNIFF that genuinely slipped three
-  // weeks ago still reads as overdue rather than being skipped past.
+  // Also discrete rather than recurring, and for the same reason: each quarter
+  // falls at a different age, and an age is only true of the date it is on.
+  // Starts at the current quarter — with a month of grace, so one that slipped
+  // three weeks ago still reads as overdue instead of being skipped past.
   const sniffGrace = addDays(todayISO(), -30);
   let sniffDate = addDays(intake, INTERVALS.SNIFF_DAYS);
   while (sniffDate && sniffDate < sniffGrace) {
@@ -307,16 +319,16 @@ export function getClientSchedule(client) {
     if (!step || step <= sniffDate) break;
     sniffDate = step;
   }
-  // How many are left before service ends — never fewer than one, so the SNIFF
-  // cannot quietly vanish from a client who is running long.
-  let sniffCount = 0;
-  for (let d = sniffDate; d && d <= serviceEnd; d = addDays(d, INTERVALS.SNIFF_DAYS)) sniffCount++;
-  push('sniff', 'SNIFF update due', sniffDate, 'sniff', {
-    items: SNIFF_ITEMS,
-    detail: 'Service Needs Inventory for Families — redone every 90 days for the length of service.',
-    recurrence: 'every90',
-    count: Math.max(1, sniffCount),
-  });
+  let sniffN = 0;
+  while (sniffDate && (sniffDate <= serviceEnd || sniffN === 0) && sniffN < 8) {
+    const quarter = Math.round(daysBetween(intake, sniffDate) / INTERVALS.SNIFF_DAYS);
+    push(`sniff-${quarter}`, 'SNIFF update due', sniffDate, 'sniff', {
+      items: SNIFF_ITEMS,
+      detail: `Service Needs Inventory for Families — quarter ${quarter}, redone every 90 days for the length of service.`,
+    });
+    sniffDate = addDays(sniffDate, INTERVALS.SNIFF_DAYS);
+    sniffN++;
+  }
 
   // --- Birth of Child (Pregnant AA) ---
   if (pregnant) {
