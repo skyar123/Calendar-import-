@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   AlertTriangle, Archive, Cake, CalendarDays, Check, ChevronDown, ClipboardPaste,
-  Download, ExternalLink, Info, Plus, Printer, Trash2, Users, X,
+  Download, ExternalLink, HelpCircle, Info, Plus, Printer, Trash2, Users, X,
 } from 'lucide-react';
 
 import {
@@ -14,6 +14,7 @@ import {
   downloadText, displayName, exportedUids, googleCalendarUrl, slug,
 } from './ics.js';
 import ExportTab, { CATEGORY_ORDER } from './ExportTab.jsx';
+import Tutorial from './Tutorial.jsx';
 import Styles from './Styles.jsx';
 
 /* ============================================================
@@ -91,6 +92,11 @@ export default function App() {
   // browser's storage loses the client ids, and with them the ability of a
   // re-import to update rather than duplicate — so the nudge is worth showing.
   const [lastBackup, setLastBackup] = useState(null);
+  // The walkthrough runs itself once, then only when asked for. It waits for
+  // storage to be read first — opening it over a caseload that was about to
+  // load would be the wrong greeting for a returning user.
+  const [tutorial, setTutorial] = useState(false);
+  const [tutorialSeen, setTutorialSeen] = useState(true);
   const [tab, setTab] = useState('clients');
   const [loaded, setLoaded] = useState(false);
   const [toast, setToast] = useState('');
@@ -99,6 +105,7 @@ export default function App() {
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORE_KEY);
+      if (!raw) { setTutorialSeen(false); setTutorial(true); }
       if (raw) {
         const saved = JSON.parse(raw);
         if (Array.isArray(saved.clients)) setClients(withUniqueIds(saved.clients));
@@ -108,9 +115,12 @@ export default function App() {
         if (typeof saved.headsUp === 'boolean') setHeadsUp(saved.headsUp);
         if (Array.isArray(saved.removals)) setRemovals(saved.removals);
         if (saved.lastBackup) setLastBackup(saved.lastBackup);
+        if (!saved.tutorialSeen) { setTutorialSeen(false); setTutorial(true); }
       }
     } catch {
       /* corrupt or unavailable storage — start clean rather than blocking the app */
+      setTutorialSeen(false);
+      setTutorial(true);
     }
     setLoaded(true);
   }, []);
@@ -118,11 +128,13 @@ export default function App() {
   useEffect(() => {
     if (!loaded) return;
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ clients, leadTimes, categories, skipPast, headsUp, removals, lastBackup }));
+      localStorage.setItem(STORE_KEY, JSON.stringify({ clients, leadTimes, categories, skipPast, headsUp, removals, lastBackup, tutorialSeen }));
     } catch {
       /* private mode / quota — the export buttons still work */
     }
-  }, [clients, leadTimes, categories, skipPast, headsUp, removals, lastBackup, loaded]);
+  }, [clients, leadTimes, categories, skipPast, headsUp, removals, lastBackup, tutorialSeen, loaded]);
+
+  const closeTutorial = () => { setTutorial(false); setTutorialSeen(true); };
 
   const say = (message) => {
     setToast(message);
@@ -224,8 +236,8 @@ export default function App() {
           </p>
           <div className="privacy mt-4">
             Everything stays in this browser. Nothing is uploaded, and no account is
-            involved. Calendars go out under initials by default — swap to nicknames or
-            full names under Export.
+            involved. Calendar entries carry initials, a date of birth and an age — never
+            a name.
           </div>
         </header>
 
@@ -268,9 +280,15 @@ export default function App() {
           intervals — baseline and initial plan at 60 days, SNIFF every 90, plan reviews
           every 90, the 6-month at 180, the annual window at 365. They are a planning aid,
           not the record. Check anything that matters against CFCR.
+          <div>
+            <button className="tut-replay" onClick={() => setTutorial(true)}>
+              <HelpCircle size={13} /> Replay the tutorial
+            </button>
+          </div>
         </footer>
       </div>
 
+      {tutorial && <Tutorial onClose={closeTutorial} />}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );

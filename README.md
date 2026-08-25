@@ -97,6 +97,17 @@ not want can be switched off entirely. Each lead time you list produces one
 warning entry, so trimming `30, 7, 1` to `30, 7` halves the entries for that
 category.
 
+## Finding your way around
+
+A seven-step walkthrough runs the first time the app is opened, covering the
+whole loop: paste, check, choose what goes in, what an entry says, export,
+import, and keeping it current afterwards.
+
+It runs itself once and then never again unasked. **Replay the tutorial** sits
+at the bottom of every screen when you want it back. It can always be left —
+Escape, the backdrop, the ✕, or Skip — and arrow keys or the dots move between
+steps.
+
 ## Pasting your caseload
 
 One client per line. The parser runs in the browser — no API key, nothing sent
